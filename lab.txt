@@ -1,0 +1,192 @@
+#include <stdio.h>
+#include <setjmp.h>
+#include <signal.h> 
+#include <unistd.h> 
+#include <stdlib.h>
+#include <time.h>
+typedef unsigned long address_t;
+#define MAX_NO_OF_THREADS 2
+#define STACK_SIZE 2048
+#define JB_SP 6
+#define JB_PC 7
+void f()
+{ 
+  for(int i = 0; i <= 8; i++){ 
+  sleep (1);
+  printf("Створення потоку %d\n", i);
+  }
+}
+typedef struct status_t
+{
+  int id;
+  enum {RUNNING,READY,SLEEPING,SUSPENDED,FINISHED} state;
+  unsigned no_of_bursts;
+  unsigned total_exec_time; 
+  unsigned total_sleep_time;
+  unsigned total_wait_time;
+  unsigned avg_exec_time;
+  unsigned avg_wait_time; 
+  unsigned wake_time;
+} status_t;
+typedef struct thread_t
+{
+  char *stack;
+  status_t *status; 
+  int priority; 
+  sigjmp_buf jbuf; 
+  address_t pc; 
+  address_t sp;
+  struct thread_t *next;
+} thread_t;
+typedef struct thread_queue_q
+{
+  thread_t *tail;
+  thread_t *head; 
+  int size;
+} thread_queue_q;
+int counter = 0;
+thread_t * GetThread(int thread_id, thread_queue_q *q) {
+  thread_t *pNew = malloc(sizeof(thread_t));
+  pNew = q->tail;
+  while (pNew) {
+    if (pNew->status->id == thread_id) { 
+      return pNew;
+    }
+  }
+  return pNew;}
+int GetMyId(thread_queue_q *q)
+{
+  thread_t *pNew = malloc(sizeof(thread_t));
+  pNew = q->tail;
+  while (pNew) {
+    if (pNew->status->state == RUNNING) {
+      return pNew->status->id;
+    }
+  } return -1;}
+unsigned int GetCurrentTime() {
+  unsigned int seconds = time(NULL); 
+  return seconds;}
+address_t translate_address(address_t addr)
+{
+  address_t ret;
+  asm volatile("xor  %%fs:0x30,%0\n" 
+      "rol  $0x11,%0\n"
+      : "=g" (ret)
+      : "0" (addr));
+  return ret;}
+void thread_queue(thread_t *t, thread_queue_q *q)
+{
+  if (q->size == 0)
+  {
+    q->tail = t;
+    q->head = q->tail;
+    q->tail->next = NULL; q->size++;
+    return;
+  }
+  if (t->priority < q->tail->priority) {
+    q->size++;
+    t->next = q->tail; 
+    q->tail = t; 
+    return;
+  }
+  if (t->priority > q->head->priority) { 
+    q->head->next = t;
+    q->head = t;
+    q->head->next = NULL;
+    q->size++; 
+    return;
+      if (t->priority > q->tail->priority) { 
+        q->size ++;
+	thread_t *pNew = malloc(sizeof(thread_t)); 
+	pNew = q->tail;
+	thread_t *pPrev = malloc(sizeof(thread_t));
+while (pNew->next) {
+	  pPrev = pNew;
+	  pNew = pNew->next;
+	  if (t->priority <= pNew->priority) {
+	    pPrev->next = t;
+	    t->next = pNew; 
+	    return;
+	  }}}}}
+int CreateThread(void (*f) (void), int priority, thread_queue_q *q)
+{
+  if (q->size + 1 > MAX_NO_OF_THREADS) {
+    printf("Багато потоків\n");
+    return -1;
+  }
+  thread_t *t = malloc(sizeof(thread_t));
+  t->status = malloc(sizeof(status_t));
+  t->stack = malloc(STACK_SIZE);
+  t->status->id = ++counter;
+  t->status->state = READY;
+  t->priority = priority;
+  t->sp=(address_t)t->stack+STACK_SIZE- sizeof(address_t);
+  t->pc=(address_t)f;
+  sigsetjmp(t->jbuf, 1);
+  (t->jbuf-> __jmpbuf)[JB_SP] = translate_address(t->sp); 
+  (t->jbuf-> __jmpbuf)[JB_PC] = translate_address(t->pc); 
+  sigemptyset(&t->jbuf-> __saved_mask);
+  thread_queue(t, q);
+  t->status->state = RUNNING;
+  f();
+  return t->status->id;
+}
+void SleepThread(int sec, thread_t *t)
+{
+  t->status->state = SLEEPING;
+  t->status->wake_time=(GetCurrentTime() + (sec * 1000));
+  t->status->total_sleep_time += (sec * 1000);
+}
+int ResumeThread(int thread_id, thread_queue_q *q)
+{
+  f();
+  thread_t *t = GetThread(thread_id, q);
+  if (t == NULL)
+    return -1;
+  if (t->status->state != SUSPENDED)
+    return thread_id;
+  t->status->state = READY; 
+  return thread_id;
+}
+int GetStatus(int thread_id, status_t *status, thread_queue_q *q)
+{
+  thread_t *t = GetThread(thread_id, q); 
+  if (t == NULL)
+    return -1;
+  status->id =t->status->id; 
+  status->state = t->status->state;
+  status->no_of_bursts = t->status->no_of_bursts; 
+  status->total_exec_time = t->status->total_exec_time;
+  status->total_sleep_time = t->status->total_sleep_time; 
+  status->total_wait_time = t->status->total_wait_time; 
+  status->avg_exec_time = t->status->avg_exec_time;
+  status->avg_wait_time = t->status->avg_wait_time; 
+  return t->status->id;
+}
+int DeleteThread(thread_t *t)
+{
+  if (t != NULL)
+  {
+  printf("Потоки видалено\n");
+  t->status->state = FINISHED;
+  }}
+void YieldCPU()
+{
+  raise(SIGVTALRM);}
+int main() {
+  //Створено чергу потоків
+  thread_queue_q *q = malloc(sizeof(thread_queue_q)*5);
+  q->size = 0;
+  q->head = NULL; q->tail = NULL;
+  printf("Create thread\n");
+  int id1 = CreateThread(f, 1, q);
+  thread_t *t1 = GetThread(id1, q);
+  printf("Призупинення роботи потоків\n"); 
+  SleepThread(3, t1);
+  printf("Старт роботи потоків\n"); 
+  ResumeThread(id1, q); 
+  DeleteThread(t1);
+  printf("Надання певного кванту часу іншим потокам \n"); 
+  YieldCPU();
+  return 0;
+}
